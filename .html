@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <title>Streaming ESP32-CAM</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 20px auto;
+            text-align: center;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        #videoCanvas {
+            max-width: 100%;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            margin: 20px 0;
+        }
+        .button-container {
+            margin: 20px 0;
+        }
+        button {
+            margin: 0 10px;
+            padding: 12px 24px;
+            border-radius: 4px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        #startStream {
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+        }
+        #startStream:hover {
+            background-color: #45a049;
+        }
+        #stopStream {
+            background-color: #f44336;
+            color: white;
+            border: none;
+        }
+        #stopStream:hover {
+            background-color: #da190b;
+        }
+        button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+        #status {
+            margin: 20px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        #stats {
+            font-size: 0.9em;
+            color: #666;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>ESP32-CAM Stream</h1>
+        <div id="status">
+            <p>Initialisation de la connexion...</p>
+        </div>
+        <div class="button-container">
+            <button id="startStream">Démarrer Stream</button>
+            <button id="stopStream" disabled>Arrêter Stream</button>
+        </div>
+        <canvas id="videoCanvas" width="640" height="480"></canvas>
+        <div id="stats"></div>
+    </div>
+
+    <script>
+        class VideoStream {
+            constructor() {
+                this.socket = null;
+                this.isStreaming = false;
+                this.lastFrameTime = 0;
+                this.frameCount = 0;
+                this.fps = 0;
+                
+                this.videoCanvas = document.getElementById('videoCanvas');
+                this.ctx = this.videoCanvas.getContext('2d');
+                this.startButton = document.getElementById('startStream');
+                this.stopButton = document.getElementById('stopStream');
+                this.statusDiv = document.getElementById('status');
+                this.statsDiv = document.getElementById('stats');
+
+                this.initializeWebSocket();
+                this.setupEventListeners();
+                this.startStatsUpdate();
+            }
+
+            initializeWebSocket() {
+                this.socket = new WebSocket('wss://ikrame-s-websocket-server.glitch.me');
+                this.socket.binaryType = 'arraybuffer';
+                
+                this.socket.onopen = () => {
+                    this.updateStatus('Connecté au serveur');
+                    this.socket.send(JSON.stringify({
+                        type: 'register-web'
+                    }));
+                };
+
+                this.socket.onclose = () => {
+                    this.updateStatus('Déconnecté du serveur');
+                    this.stopStream();
+                    setTimeout(() => this.initializeWebSocket(), 5000);
+                };
+
+                this.socket.onerror = (error) => {
+                    this.updateStatus('Erreur de connexion');
+                    console.error('WebSocket error:', error);
+                };
+
+                this.socket.onmessage = async (event) => {
+                    if (event.data instanceof ArrayBuffer) {
+                        await this.handleVideoFrame(event.data);
+                    } else {
+                        this.handleWebSocketMessage(event);
+                    }
+                };
+            }
+
+            setupEventListeners() {
+                this.startButton.addEventListener('click', () => this.startStream());
+                this.stopButton.addEventListener('click', () => this.stopStream());
+            }
+
+            startStream() {
+                if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+                    this.updateStatus('Pas de connexion au serveur');
+                    return;
+                }
+
+                this.isStreaming = true;
